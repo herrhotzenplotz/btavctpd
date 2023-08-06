@@ -1,0 +1,8 @@
+.depend
+.depend.btavctpd
+.depend.btavctpd.btavctpd.o
+.depend.btavctpd.o
+btavctpd
+btavctpd.debug
+btavctpd.full
+btavctpd.o

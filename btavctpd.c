@@ -142,6 +142,7 @@ parseflags(int *argc, char ***argv)
 {
 	int ch;
 	struct option options[] = {
+		{ "device", required_argument, NULL, 'd' },
 		{0},
 	};
 

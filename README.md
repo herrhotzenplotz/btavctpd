@@ -12,3 +12,9 @@ Run make, darnit.
 ```console
 $ ./btavctpd [-d] -h <bthostname>
 ```
+
+Also, there's a manual page that you can read:
+
+```console
+$ man ./btavctpd.8
+```

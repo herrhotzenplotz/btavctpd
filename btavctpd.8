@@ -1,0 +1,62 @@
+.Dd August 06, 2023
+.Dt BTAVCTPD 8
+.Os
+.Sh NAME
+.Nm btavctpd
+.Nd Media control for Bluetooth devices
+.Sh SYNOPSIS
+.Nm
+.Op Fl d
+.Fl h Ar bthostname
+.Sh DESCRIPTION
+The
+.Nm
+daemon can be used to allow local media players under X11 to be
+controlled via the control buttons found on Bluetooth devices
+such as headsets and speakers.
+.Pp
+Currently it requires
+.Xr xdotool 1
+to be installed and will emit key press events for the X11 keys
+.Dv XF86AudioPlay ,
+.Dv XF86AudioPause ,
+.Dv XF86AudioNext
+and
+.Dv XF86AudioPrev .
+.Pp
+The daemon must be launched from within an X11 session.
+.Sh OPTIONS
+.Bl -tag -width indent
+.It Fl d , -no-daemon
+Do not daemonise and don't detach from the controlling terminal.
+.It Fl h , -hostname Ar bthostname
+Connect to the given Bluetooth address or hostname.
+.El
+.Sh FILES
+.Bl -tag -width indent
+.It Pa /etc/bluetooth/hosts
+List of Bluetooth hostnames and their addresses
+.El
+.Sh EXAMPLES
+Run in the background and connect to a device called
+.Dq headphones
+listed in
+.Pa /etc/bluetooth/hosts :
+.Bd -literal -width indent
+$ btavctpd -h headphones
+.Ed
+.Sh DIAGNOSTICS
+Errors are logged to syslogd and unless the
+.Fl d
+flag is set also to stderr.
+.Sh SEE ALSO
+.Xr hccontrol 8 ,
+.Xr hcsecd 8 ,
+.Xr virtual_oss 1 ,
+.Xr xdotool 1
+.Sh AUTHORS
+.An Nico Sonack aka. herrhotzenplotz Aq Mt nsonack@herrhotzenplotz.de
+.Sh BUGS
+Ideally this daemon should use the DBus to report events and provide
+status info to connected devices. However the DBus API sucks and the
+author didn't want to deal with its bloat so you get what you get.

@@ -2,10 +2,12 @@
 #include <err.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <unistd.h>
 
 #include <sys/endian.h>
@@ -126,14 +128,39 @@ avctp_is_singleframe(struct avctp_header const *hdr)
 	return (hdr->id & 0xC) == 0;
 }
 
-/* Address of the remote side */
-static bdaddr_t remote = {0};
+static bdaddr_t remote = {0};    /* Address of the remote side */
+static int dflag = 0;            /* -d was specified (no daemon) */
 
 /* print a usage message */
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: %s -d address\n", getprogname());
+	fprintf(stderr, "usage: %s [-d] -h address\n", getprogname());
+}
+
+static void
+bterr(char const *const fmt, ...)
+{
+	va_list args;
+	char buffer[128] = {0};
+
+	va_start(args, fmt);
+	vsnprintf(buffer, sizeof buffer, fmt, args);
+	va_end(args);
+
+	syslog(LOG_ERR, "%s: %s", buffer, strerror(errno));
+
+	exit(1);
+}
+
+static void
+btwarnx(char const *const fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	vsyslog(LOG_WARNING, fmt, args);
+	va_end(args);
 }
 
 /* Parse command line options */
@@ -142,13 +169,14 @@ parseflags(int *argc, char ***argv)
 {
 	int ch;
 	struct option options[] = {
-		{ "device", required_argument, NULL, 'd' },
+		{ "host", required_argument, NULL, 'h' },
+		{ "no-daemon", no_argument, NULL, 'd' },
 		{0},
 	};
 
-	while ((ch = getopt_long(*argc, *argv, "+d:", options, NULL)) != -1) {
+	while ((ch = getopt_long(*argc, *argv, "+dh:", options, NULL)) != -1) {
 		switch (ch) {
-		case 'd': {
+		case 'h': {
 			/* try as raw address first */
 			if (bt_aton(optarg, &remote))
 				break;
@@ -160,6 +188,9 @@ parseflags(int *argc, char ***argv)
 
 			assert(sizeof(remote) == ent->h_length);
 			memcpy(&remote, ent->h_addr_list[0], sizeof(remote));
+		} break;
+		case 'd': {
+			dflag = 1;
 		} break;
 		default: {
 			usage();
@@ -193,7 +224,7 @@ reply_passthru(int fd, uint8_t const ctype, uint8_t const operation)
 
 	size_t rc = send(fd, buffer, pkt_len, 0);
 	if (rc < 0)
-		err(1, "send failed");
+		bterr("send failed");
 }
 
 static void
@@ -202,30 +233,39 @@ handle_passthru(int fd, uint8_t const *buffer, size_t const buffer_size)
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avc_header *avc = (struct avc_header *)(ctp_hdr + 1);
 
-	if (avc->operation & 0x80)
-		puts("Button released");
+	/* Button was released */
+	if (avc->operation & 0x80) {
+		syslog(LOG_INFO, "Button release event");
+		return;
+	}
 
 	switch (avc->operation & 0x7F) {
 	case AVC_PLAY:
+		syslog(LOG_INFO, "Received Play Event");
 		system("xdotool key XF86AudioPlay");
 		goto ack;
 	case AVC_PAUSE:
-		system("xdotool key XF86AudioPlay");
+		syslog(LOG_INFO, "Received Pause Event");
+		system("xdotool key XF86AudioPause");
 		goto ack;
 	case AVC_NEXT:
+		syslog(LOG_INFO, "Received Next Event");
 		system("xdotool key XF86AudioNext");
 		goto ack;
 	case AVC_PREV:
+		syslog(LOG_INFO, "Received Previous Event");
 		system("xdotool key XF86AudioPrev");
 		goto ack;
 	case AVC_STOP:
+		syslog(LOG_INFO, "Received Stop Event");
 		puts("Stopping");
 		/* FALLTHRU */
 	ack:
 		reply_passthru(fd, AVRCP_CTYPE_ACCEPTED, avc->operation);
 		break;
 	default:
-		warnx("Unknown operation: 0x%"PRIx8, avc->operation & 0x7F);
+		btwarnx("rejecting unknown operation: 0x%"PRIx8,
+		        avc->operation & 0x7F);
 		reply_passthru(fd, AVRCP_CTYPE_REJECTED, avc->operation);
 		break;
 	}
@@ -241,11 +281,11 @@ handle_command(int fd, uint8_t const *buffer, size_t const buffer_size)
 		if (rcp_hdr->opcode == AVRCP_OPCODE_PASSTHRU)
 			handle_passthru(fd, buffer, buffer_size);
 		else
-			warnx("unhandled control command: 0x%"PRIx8,
-			      rcp_hdr->opcode);
+			btwarnx("unhandled control command: 0x%"PRIx8,
+			        rcp_hdr->opcode);
 	} else {
-		warnx("Unhandled command with ctype 0x%"PRIx8,
-		      rcp_hdr->ctype);
+		btwarnx("Unhandled command with ctype 0x%"PRIx8,
+		        rcp_hdr->ctype);
 	}
 }
 
@@ -281,13 +321,14 @@ register_notifications(int const fd, uint8_t const evt_id)
 
 	ssize_t n = send(fd, buffer, packet_len, 0);
 	if (n < 0)
-		err(1, "send");
+		bterr("send");
 }
 
 static void
 handle_supported_event(int fd, uint8_t evt)
 {
-	printf("Register notifications for event %s\n", event_name(evt));
+	syslog(LOG_INFO, "Register notifications for event %s",
+	       event_name(evt));
 	register_notifications(fd, evt);
 }
 
@@ -302,7 +343,7 @@ handle_stable_response(int fd, uint8_t const *buffer, size_t const buffer_size)
 		uint8_t *caps = (uint8_t *)(rcp_hdr + 1);
 
 		if (rcp_hdr->param_len < 2) {
-			warnx("Too few params in AVRCP_PDUID_GETCAPABILITIES response");
+			btwarnx("Too few params in AVRCP_PDUID_GETCAPABILITIES response");
 			return;
 		}
 
@@ -320,7 +361,7 @@ handle_stable_response(int fd, uint8_t const *buffer, size_t const buffer_size)
 		}
 	} break;
 	case AVRCP_PDUID_REGISTERNOTIFICATION: {
-		warnx("Stable RegisterNotification response");
+		btwarnx("Stable RegisterNotification response");
 	} break;
 	}
 }
@@ -341,10 +382,10 @@ handle_change_notification(int fd, uint8_t const *buffer, size_t const buffer_si
 	case AVRCP_EVENT_VOLUME_CHANGED: {
 		uint8_t vol = c_payload->payload[0] & 0x7F; /* RFA bit masked off */
 		double perc = ((double)(vol) / (double)(0x7F)) * 100.0;
-		printf("Volume changed to %lf%%\n", perc);
+		syslog(LOG_INFO, "Volume changed to %lf%%", perc);
 	} break;
 	default:
-		warnx("Unhandled change event");
+		btwarnx("Unhandled change event");
 		break;
 	}
 }
@@ -358,7 +399,7 @@ handle_response(int fd, uint8_t const *buffer, size_t const buffer_size)
 	if (rcp_hdr->ctype == AVRCP_CTYPE_STABLE)
 		handle_stable_response(fd, buffer, buffer_size);
 	else if (rcp_hdr->ctype == AVRCP_CTYPE_NOTIFY)
-		warnx("NOTIFY response unhandled");
+		btwarnx("NOTIFY response unhandled");
 	else if (rcp_hdr->ctype == AVRCP_CTYPE_CHANGED)
 		handle_change_notification(fd, buffer, buffer_size);
 }
@@ -370,15 +411,7 @@ handle_event(int fd)
 
 	ssize_t msgsize = recv(fd, buffer, sizeof(buffer), 0);
 	if (msgsize < 0)
-		err(1, "could not receive message");
-
-#if 0
-	printf("%zu bytes:", msgsize);
-	for (size_t i = 0; i < msgsize; ++i) {
-		printf(" 0x%"PRIx8, buffer[i]);
-	}
-	printf("\n");
-#endif
+		bterr("could not receive message");
 
 	struct avctp_header *avctphdr = (struct avctp_header *)buffer;
 	if (avctp_is_command(avctphdr))
@@ -386,7 +419,7 @@ handle_event(int fd)
 	else if (avctp_is_response(avctphdr))
 		handle_response(fd, buffer, msgsize);
 	else
-		warnx("Don't know how to handle packet\n");
+		btwarnx("Don't know how to handle packet");
 
 }
 
@@ -417,26 +450,26 @@ query_capabilities(int fd)
 
 	ssize_t n = send(fd, buffer, packet_len, 0);
 	if (n < 0)
-		err(1, "send");
+		bterr("send");
 
 	return 0;
 }
 
 static void
-connectavctp(void)
+loop(void)
 {
 	int fd;
 	struct sockaddr_l2cap sa = {0}, lsa = {0};
 
 	fd = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BLUETOOTH_PROTO_L2CAP);
 	if (fd < 0)
-		err(1, "could not create BT socket");
+		bterr("could not create BT socket");
 
 	lsa.l2cap_len = sizeof(lsa);
 	lsa.l2cap_family = AF_BLUETOOTH;
 
 	if (bind(fd, (struct sockaddr *)&lsa, sizeof(lsa)) < 0)
-		err(1, "could not bind BT socket to local address");
+		bterr("could not bind BT socket to local address");
 
 	sa.l2cap_len = sizeof(sa);
 	sa.l2cap_family = AF_BLUETOOTH;
@@ -444,21 +477,26 @@ connectavctp(void)
 	bdaddr_copy(&sa.l2cap_bdaddr, &remote);
 
 	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
-		err(1, "could not connect to AVCTP service");
+		bterr("could not connect to AVCTP service");
 
-	printf("Connected\n");
+	if (!dflag && daemon(0, 0) < 0)
+		bterr("could not daemonise");
 
 	query_capabilities(fd);
 
 	/* Poll loop */
 	{
 		for (;;) {
-			struct pollfd pfd = { .fd = fd, .events = POLLIN|POLLHUP, .revents = 0 };
 			int rc;
+			struct pollfd pfd = {
+				.fd = fd,
+				.events = POLLIN|POLLHUP,
+				.revents = 0,
+			};
 
 			rc = poll(&pfd, 1, -1);
 			if (rc < 0)
-				err(1, "poll error");
+				bterr("poll error");
 
 			if (pfd.revents & POLLIN) {
 				handle_event(fd);
@@ -475,10 +513,12 @@ main(int argc, char *argv[])
 	char namebuf[32] = {0};
 
 	parseflags(&argc, &argv);
-	printf("BT Address: %s\n", bt_ntoa(&remote, namebuf));
 
-	/* connect */
-	connectavctp();
+	openlog(getprogname(), LOG_PID|LOG_PERROR, LOG_DAEMON);
+	syslog(LOG_INFO, "Connecting to BT Address: %s\n",
+	       bt_ntoa(&remote, namebuf));
+
+	loop();
 
 	return 0;
 }

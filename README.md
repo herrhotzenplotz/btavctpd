@@ -10,5 +10,5 @@ Run make, darnit.
 ## Usage
 
 ```console
-$ ./btavctpd -d <bthostname>
+$ ./btavctpd [-d] -h <bthostname>
 ```

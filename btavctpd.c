@@ -130,12 +130,13 @@ avctp_is_singleframe(struct avctp_header const *hdr)
 
 static bdaddr_t remote = {0};    /* Address of the remote side */
 static int dflag = 0;            /* -d was specified (no daemon) */
+static int pflag = 0;            /* -p was specfied (use playerctl) */
 
 /* print a usage message */
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: %s [-d] -h address\n", getprogname());
+	fprintf(stderr, "usage: %s [-d] [-p] -h address\n", getprogname());
 }
 
 static void
@@ -174,7 +175,7 @@ parseflags(int *argc, char ***argv)
 		{0},
 	};
 
-	while ((ch = getopt_long(*argc, *argv, "+dh:", options, NULL)) != -1) {
+	while ((ch = getopt_long(*argc, *argv, "+dph:", options, NULL)) != -1) {
 		switch (ch) {
 		case 'h': {
 			/* try as raw address first */
@@ -191,6 +192,9 @@ parseflags(int *argc, char ***argv)
 		} break;
 		case 'd': {
 			dflag = 1;
+		} break;
+		case 'p': {
+			pflag = 1;
 		} break;
 		default: {
 			usage();
@@ -228,6 +232,46 @@ reply_passthru(int fd, uint8_t const ctype, uint8_t const operation)
 }
 
 static void
+do_play(void)
+{
+	if (pflag) {
+		system("playerctl play");
+	} else {
+		system("xdotool key XF86AudioPlay");
+	}
+}
+
+static void
+do_playpause(void)
+{
+	if (pflag) {
+		system("playerctl play-pause");
+	} else {
+		system("xdotool key XF86AudioPlay");
+	}
+}
+
+static void
+do_next(void)
+{
+	if (pflag) {
+		system("playerctl next");
+	} else {
+		system("xdotool key XF86AudioNext");
+	}
+}
+
+static void
+do_prev(void)
+{
+	if (pflag) {
+		system("playerctl previous");
+	} else {
+		system("xdotool key XF86AudioPrev");
+	}
+}
+
+static void
 handle_passthru(int fd, uint8_t const *buffer, size_t const buffer_size)
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
@@ -242,19 +286,19 @@ handle_passthru(int fd, uint8_t const *buffer, size_t const buffer_size)
 	switch (avc->operation & 0x7F) {
 	case AVC_PLAY:
 		syslog(LOG_INFO, "Received Play Event");
-		system("xdotool key XF86AudioPlay");
+		do_play();
 		goto ack;
 	case AVC_PAUSE:
 		syslog(LOG_INFO, "Received Pause Event");
-		system("xdotool key XF86AudioPause");
+		do_playpause();
 		goto ack;
 	case AVC_NEXT:
 		syslog(LOG_INFO, "Received Next Event");
-		system("xdotool key XF86AudioNext");
+		do_next();
 		goto ack;
 	case AVC_PREV:
 		syslog(LOG_INFO, "Received Previous Event");
-		system("xdotool key XF86AudioPrev");
+		do_prev();
 		goto ack;
 	case AVC_STOP:
 		syslog(LOG_INFO, "Received Stop Event");

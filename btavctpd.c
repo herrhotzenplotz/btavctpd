@@ -427,6 +427,9 @@ handle_change_notification(int fd, uint8_t const *buffer, size_t const buffer_si
 		uint8_t vol = c_payload->payload[0] & 0x7F; /* RFA bit masked off */
 		double perc = ((double)(vol) / (double)(0x7F)) * 100.0;
 		syslog(LOG_INFO, "Volume changed to %lf%%", perc);
+
+		/* re-register the event */
+		register_notifications(fd, c_payload->evt_id);
 	} break;
 	default:
 		btwarnx("Unhandled change event");

@@ -1,9 +1,9 @@
+#include "btavctpd.h"
+
 #include <assert.h>
 #include <err.h>
 #include <getopt.h>
-#include <inttypes.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,115 +16,6 @@
 #define L2CAP_SOCKET_CHECKED 1
 #include <bluetooth.h>
 #include <sdp.h>
-
-struct ctx {
-	int fd; /* l2cap socket */
-
-	uint32_t event_mask; /* registered events by the peer */
-};
-
-struct avctp_header {
-	uint8_t id;
-	uint16_t pid;
-} __packed;
-
-struct avc_header {
-	uint8_t ctype;
-	uint8_t subunit;
-	uint8_t opcode;
-	uint8_t operation;
-	uint8_t data_length;
-} __packed;
-
-struct avrcp_header {
-	uint8_t ctype;
-	uint8_t subunit;
-	uint8_t opcode;
-	uint8_t companyid[3];
-	uint8_t pdu_id;
-	uint8_t packet_type;
-	uint16_t param_len;
-} __packed;
-
-struct avrcp_event {
-	uint8_t event_id;
-	uint8_t params[0];
-} __packed;
-
-enum {
-	AVRCP_CTYPE_CONTROL = 0x00,
-	AVRCP_CTYPE_STATUS = 0x01,
-	AVRCP_CTYPE_SPECIFIC_INQUIRY = 0x02,
-	AVRCP_CTYPE_NOTIFY = 0x03,
-	AVRCP_CTYPE_GENERAL_INQUIRY = 0x04,
-	AVRCP_CTYPE_ACCEPTED = 0x09,
-	AVRCP_CTYPE_REJECTED = 0x0a,
-	AVRCP_CTYPE_STABLE = 0x0c,
-	AVRCP_CTYPE_CHANGED = 0x0d,
-	AVRCP_CTYPE_INTERIM = 0x0f,
-};
-
-enum {
-	AVRCP_PDUID_GETCAPABILITIES = 0x10,
-	AVRCP_PDUID_REGISTERNOTIFICATION = 0x31,
-};
-
-struct avrcp_reg_evt_payload {
-	uint8_t evt_id;
-	uint8_t rfa[4];
-} __packed;
-
-struct avrcp_event_list {
-	uint8_t n_evts;
-	uint8_t evts[0];
-} __packed;
-
-enum {
-	AVRCP_OPCODE_VENDOR = 0x00,
-	AVRCP_OPCODE_PASSTHRU = 0x7C,
-};
-
-enum {
-	AVRCP_EVENT_STATUS_CHANGED = 0x01,
-	AVRCP_EVENT_TRACK_CHANGED = 0x02,
-	AVRCP_EVENT_TRACK_REACHED_END = 0x03,
-	AVRCP_EVENT_TRACK_REACHED_START = 0x04,
-	AVRCP_EVENT_PLAYBACK_POS_CHANGED = 0x05,
-	AVRCP_EVENT_SETTINGS_CHANGED = 0x08,
-	AVRCP_EVENT_AVAILABLE_PLAYERS_CHANGED = 0x0a,
-	AVRCP_EVENT_ADDRESSED_PLAYER_CHANGED = 0x0b,
-	AVRCP_EVENT_VOLUME_CHANGED = 0x0d,
-};
-
-static char const *const evmap[] = {
-	[AVRCP_EVENT_STATUS_CHANGED] = "Status Changed",
-	[AVRCP_EVENT_TRACK_CHANGED] = "Track Changed",
-	[AVRCP_EVENT_TRACK_REACHED_END] = "Track Reached End",
-	[AVRCP_EVENT_TRACK_REACHED_START] = "Track Reached Start",
-	[AVRCP_EVENT_PLAYBACK_POS_CHANGED] = "Playback Position Changed",
-	[AVRCP_EVENT_SETTINGS_CHANGED] = "Settings Changed",
-	[AVRCP_EVENT_AVAILABLE_PLAYERS_CHANGED] = "Available Players Changed",
-	[AVRCP_EVENT_ADDRESSED_PLAYER_CHANGED] = "Adressed Players Changed",
-	[AVRCP_EVENT_VOLUME_CHANGED] = "Volume Changed",
-};
-
-enum {
-	AVC_PLAY = 0x44,
-	AVC_STOP = 0x45,
-	AVC_PAUSE = 0x46,
-	AVC_NEXT = 0x4b,
-	AVC_PREV = 0x4c,
-};
-
-static char const *
-event_name(uint8_t const ev)
-{
-	if (ev > (sizeof(evmap) / sizeof(*evmap)))
-		return "unknown";
-
-	char const *const n = evmap[ev];
-	return n ? n : "unknown";
-}
 
 static inline int
 avctp_is_response(struct avctp_header const *hdr)
@@ -170,7 +61,7 @@ bterr(char const *const fmt, ...)
 	exit(1);
 }
 
-static void
+void
 btwarnx(char const *const fmt, ...)
 {
 	va_list args;
@@ -506,11 +397,19 @@ handle_response(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size
 		handle_change_notification(ctx, buffer, buffer_size);
 }
 
-static void
-handle_event(struct ctx *ctx)
+static gboolean
+handle_event(GIOChannel *chan, GIOCondition cond, gpointer data)
 {
 	uint8_t buffer[128];
+	struct ctx *ctx = (struct ctx *)data;
 
+	/* check for hangup */
+	if (cond & G_IO_HUP) {
+		btwarnx("socket hung up");
+		return FALSE;
+	}
+
+	/* otherwise read the message and handle it */
 	ssize_t msgsize = recv(ctx->fd, buffer, sizeof(buffer), 0);
 	if (msgsize < 0)
 		bterr("could not receive message");
@@ -522,6 +421,8 @@ handle_event(struct ctx *ctx)
 		handle_response(ctx, buffer, msgsize);
 	else
 		btwarnx("Don't know how to handle packet");
+
+	return TRUE;
 
 }
 
@@ -558,19 +459,33 @@ query_capabilities(struct ctx *ctx)
 }
 
 static void
-loop(void)
+setup_glib_loop(struct ctx *ctx)
 {
-	struct ctx ctx = {0};
+	GMainContext *gctx = g_main_context_default();
+	GIOChannel *iochan = NULL;
+
+	ctx->main_loop = g_main_loop_new(gctx, FALSE);
+
+	iochan = g_io_channel_unix_new(ctx->fd);
+	g_io_channel_set_encoding(iochan, NULL, NULL);
+	g_io_channel_set_buffered(iochan, FALSE);
+
+	g_io_add_watch(iochan, G_IO_IN|G_IO_HUP, handle_event, ctx);
+}
+
+static void
+loop(struct ctx *ctx)
+{
 	struct sockaddr_l2cap sa = {0}, lsa = {0};
 
-	ctx.fd = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BLUETOOTH_PROTO_L2CAP);
-	if (ctx.fd < 0)
+	ctx->fd = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BLUETOOTH_PROTO_L2CAP);
+	if (ctx->fd < 0)
 		bterr("could not create BT socket");
 
 	lsa.l2cap_len = sizeof(lsa);
 	lsa.l2cap_family = AF_BLUETOOTH;
 
-	if (bind(ctx.fd, (struct sockaddr *)&lsa, sizeof(lsa)) < 0)
+	if (bind(ctx->fd, (struct sockaddr *)&lsa, sizeof(lsa)) < 0)
 		bterr("could not bind BT socket to local address");
 
 	sa.l2cap_len = sizeof(sa);
@@ -578,42 +493,23 @@ loop(void)
 	sa.l2cap_psm = SDP_UUID_PROTOCOL_AVCTP;
 	bdaddr_copy(&sa.l2cap_bdaddr, &remote);
 
-	if (connect(ctx.fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+	if (connect(ctx->fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
 		bterr("could not connect to AVCTP service");
 
 	if (!dflag && daemon(0, 0) < 0)
 		bterr("could not daemonise");
 
-	query_capabilities(&ctx);
+	setup_glib_loop(ctx);
 
-	/* Poll loop */
-	{
-		for (;;) {
-			int rc;
-			struct pollfd pfd = {
-				.fd = ctx.fd,
-				.events = POLLIN|POLLHUP,
-				.revents = 0,
-			};
-
-			rc = poll(&pfd, 1, -1);
-			if (rc < 0)
-				bterr("poll error");
-
-			if (pfd.revents & POLLIN) {
-				handle_event(&ctx);
-			}
-		}
-	}
-
-	close(ctx.fd);
-	ctx.fd = -1;
+	query_capabilities(ctx);
+	g_main_loop_run(ctx->main_loop);
 }
 
 int
 main(int argc, char *argv[])
 {
 	char namebuf[32] = {0};
+	struct ctx ctx = {0};
 
 	parseflags(&argc, &argv);
 
@@ -621,7 +517,8 @@ main(int argc, char *argv[])
 	syslog(LOG_INFO, "Connecting to BT Address: %s\n",
 	       bt_ntoa(&remote, namebuf));
 
-	loop();
+	playerctl_init(&ctx);
+	loop(&ctx);
 
 	return 0;
 }

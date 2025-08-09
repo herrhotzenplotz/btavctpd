@@ -17,6 +17,12 @@
 #include <bluetooth.h>
 #include <sdp.h>
 
+struct ctx {
+	int fd; /* l2cap socket */
+
+	uint32_t event_mask; /* registered events by the peer */
+};
+
 struct avctp_header {
 	uint8_t id;
 	uint16_t pid;
@@ -62,6 +68,16 @@ enum {
 	AVRCP_PDUID_GETCAPABILITIES = 0x10,
 	AVRCP_PDUID_REGISTERNOTIFICATION = 0x31,
 };
+
+struct avrcp_reg_evt_payload {
+	uint8_t evt_id;
+	uint8_t rfa[4];
+} __packed;
+
+struct avrcp_event_list {
+	uint8_t n_evts;
+	uint8_t evts[0];
+} __packed;
 
 enum {
 	AVRCP_OPCODE_VENDOR = 0x00,
@@ -208,7 +224,7 @@ parseflags(int *argc, char ***argv)
 }
 
 static void
-reply_passthru(int fd, uint8_t const ctype, uint8_t const operation)
+reply_passthru(struct ctx *ctx, uint8_t const ctype, uint8_t const operation)
 {
 	uint8_t buffer[8] = {0};
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
@@ -226,7 +242,7 @@ reply_passthru(int fd, uint8_t const ctype, uint8_t const operation)
         avc->operation = operation;
         avc->data_length = 0;
 
-	size_t rc = send(fd, buffer, pkt_len, 0);
+	size_t rc = send(ctx->fd, buffer, pkt_len, 0);
 	if (rc < 0)
 		bterr("send failed");
 }
@@ -272,7 +288,7 @@ do_prev(void)
 }
 
 static void
-handle_passthru(int fd, uint8_t const *buffer, size_t const buffer_size)
+handle_passthru(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avc_header *avc = (struct avc_header *)(ctp_hdr + 1);
@@ -305,28 +321,76 @@ handle_passthru(int fd, uint8_t const *buffer, size_t const buffer_size)
 		puts("Stopping");
 		/* FALLTHRU */
 	ack:
-		reply_passthru(fd, AVRCP_CTYPE_ACCEPTED, avc->operation);
+		reply_passthru(ctx, AVRCP_CTYPE_ACCEPTED, avc->operation);
 		break;
 	default:
 		btwarnx("rejecting unknown operation: 0x%"PRIx8,
 		        avc->operation & 0x7F);
-		reply_passthru(fd, AVRCP_CTYPE_REJECTED, avc->operation);
+		reply_passthru(ctx, AVRCP_CTYPE_REJECTED, avc->operation);
 		break;
 	}
 }
 
 static void
-handle_command(int fd, uint8_t const *buffer, size_t const buffer_size)
+handle_event_registration(struct ctx *ctx, uint8_t const *buffer,
+                          size_t const buffer_size)
+{
+	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
+	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
+	struct avrcp_reg_evt_payload *evt = (struct avrcp_reg_evt_payload *)(rcp_hdr + 1);
+	uint8_t bit_offset;
+
+	bit_offset = evt->evt_id - 1;
+	if (bit_offset >= 0xd) {
+		btwarnx("bad event id from peer");
+		return;
+	}
+
+	btwarnx("Peer registed %s event", event_name(evt->evt_id));
+	ctx->event_mask |= (1 << bit_offset);
+
+	/* TODO: send interim response */
+}
+
+static void
+handle_notify_command(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
+{
+	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
+	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
+
+	switch (rcp_hdr->pdu_id) {
+	case AVRCP_PDUID_REGISTERNOTIFICATION: {
+		handle_event_registration(ctx, buffer, buffer_size);
+	} break;
+	default: {
+		btwarnx("unhandled notify PDU: 0x%"PRIx8, rcp_hdr->pdu_id);
+	} break;
+	}
+}
+
+static void
+handle_command(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
 
 	if (rcp_hdr->ctype == AVRCP_CTYPE_CONTROL) {
 		if (rcp_hdr->opcode == AVRCP_OPCODE_PASSTHRU)
-			handle_passthru(fd, buffer, buffer_size);
+			handle_passthru(ctx, buffer, buffer_size);
 		else
 			btwarnx("unhandled control command: 0x%"PRIx8,
 			        rcp_hdr->opcode);
+	} else if (rcp_hdr->ctype == AVRCP_CTYPE_NOTIFY) {
+		if (rcp_hdr->subunit != (0x09 << 3) ||
+		    rcp_hdr->opcode != 0 ||
+		    rcp_hdr->companyid[0] != 0 ||
+		    rcp_hdr->companyid[1] != 0x19 ||
+		    rcp_hdr->companyid[2] != 0x58) {
+			btwarnx("bad notify command received from peer");
+			return;
+		}
+
+		handle_notify_command(ctx, buffer, buffer_size);
 	} else {
 		btwarnx("Unhandled command with ctype 0x%"PRIx8,
 		        rcp_hdr->ctype);
@@ -334,17 +398,12 @@ handle_command(int fd, uint8_t const *buffer, size_t const buffer_size)
 }
 
 static void
-register_notifications(int const fd, uint8_t const evt_id)
+register_notifications(struct ctx *ctx, uint8_t const evt_id)
 {
-	struct reg_evt_payload {
-		uint8_t evt_id;
-		uint8_t rfa[4];
-	} __packed;
-
 	uint8_t buffer[64] = {0};
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
-	struct reg_evt_payload *rep = (struct reg_evt_payload *)(rcp_hdr + 1);
+	struct avrcp_reg_evt_payload *rep = (struct avrcp_reg_evt_payload *)(rcp_hdr + 1);
 	enum { packet_len = sizeof(*ctp_hdr) + sizeof(*rcp_hdr) + sizeof(*rep) };
 
 	static_assert(packet_len <= sizeof(buffer), "buffer too smol");
@@ -363,21 +422,21 @@ register_notifications(int const fd, uint8_t const evt_id)
 
 	rep->evt_id = evt_id;
 
-	ssize_t n = send(fd, buffer, packet_len, 0);
+	ssize_t n = send(ctx->fd, buffer, packet_len, 0);
 	if (n < 0)
 		bterr("send");
 }
 
 static void
-handle_supported_event(int fd, uint8_t evt)
+handle_supported_event(struct ctx *ctx, uint8_t evt)
 {
 	syslog(LOG_INFO, "Register notifications for event %s",
 	       event_name(evt));
-	register_notifications(fd, evt);
+	register_notifications(ctx, evt);
 }
 
 static void
-handle_stable_response(int fd, uint8_t const *buffer, size_t const buffer_size)
+handle_stable_response(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
@@ -392,15 +451,11 @@ handle_stable_response(int fd, uint8_t const *buffer, size_t const buffer_size)
 		}
 
 		if (*caps == 0x03) /* Events Supported */ {
-			struct evt_list {
-				uint8_t n_evts;
-				uint8_t evts[0];
-			} __packed *evt_list;
-
-			evt_list = (struct evt_list *)(caps + 1);
+			struct avrcp_event_list *evt_list =
+				(struct avrcp_event_list *)(caps + 1);
 
 			for (uint8_t i = 0; i < evt_list->n_evts; ++i) {
-				handle_supported_event(fd, evt_list->evts[i]);
+				handle_supported_event(ctx, evt_list->evts[i]);
 			}
 		}
 	} break;
@@ -411,7 +466,7 @@ handle_stable_response(int fd, uint8_t const *buffer, size_t const buffer_size)
 }
 
 static void
-handle_change_notification(int fd, uint8_t const *buffer, size_t const buffer_size)
+handle_change_notification(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
@@ -429,7 +484,7 @@ handle_change_notification(int fd, uint8_t const *buffer, size_t const buffer_si
 		syslog(LOG_INFO, "Volume changed to %lf%%", perc);
 
 		/* re-register the event */
-		register_notifications(fd, c_payload->evt_id);
+		register_notifications(ctx, c_payload->evt_id);
 	} break;
 	default:
 		btwarnx("Unhandled change event");
@@ -438,40 +493,40 @@ handle_change_notification(int fd, uint8_t const *buffer, size_t const buffer_si
 }
 
 static void
-handle_response(int fd, uint8_t const *buffer, size_t const buffer_size)
+handle_response(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
 
 	if (rcp_hdr->ctype == AVRCP_CTYPE_STABLE)
-		handle_stable_response(fd, buffer, buffer_size);
+		handle_stable_response(ctx, buffer, buffer_size);
 	else if (rcp_hdr->ctype == AVRCP_CTYPE_NOTIFY)
 		btwarnx("NOTIFY response unhandled");
 	else if (rcp_hdr->ctype == AVRCP_CTYPE_CHANGED)
-		handle_change_notification(fd, buffer, buffer_size);
+		handle_change_notification(ctx, buffer, buffer_size);
 }
 
 static void
-handle_event(int fd)
+handle_event(struct ctx *ctx)
 {
 	uint8_t buffer[128];
 
-	ssize_t msgsize = recv(fd, buffer, sizeof(buffer), 0);
+	ssize_t msgsize = recv(ctx->fd, buffer, sizeof(buffer), 0);
 	if (msgsize < 0)
 		bterr("could not receive message");
 
 	struct avctp_header *avctphdr = (struct avctp_header *)buffer;
 	if (avctp_is_command(avctphdr))
-		handle_command(fd, buffer, msgsize);
+		handle_command(ctx, buffer, msgsize);
 	else if (avctp_is_response(avctphdr))
-		handle_response(fd, buffer, msgsize);
+		handle_response(ctx, buffer, msgsize);
 	else
 		btwarnx("Don't know how to handle packet");
 
 }
 
 static int
-query_capabilities(int fd)
+query_capabilities(struct ctx *ctx)
 {
 	uint8_t buffer[64] = {0};
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
@@ -495,7 +550,7 @@ query_capabilities(int fd)
 
 	*caps = 0x03; /* events supported */
 
-	ssize_t n = send(fd, buffer, packet_len, 0);
+	ssize_t n = send(ctx->fd, buffer, packet_len, 0);
 	if (n < 0)
 		bterr("send");
 
@@ -505,17 +560,17 @@ query_capabilities(int fd)
 static void
 loop(void)
 {
-	int fd;
+	struct ctx ctx = {0};
 	struct sockaddr_l2cap sa = {0}, lsa = {0};
 
-	fd = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BLUETOOTH_PROTO_L2CAP);
-	if (fd < 0)
+	ctx.fd = socket(PF_BLUETOOTH, SOCK_SEQPACKET, BLUETOOTH_PROTO_L2CAP);
+	if (ctx.fd < 0)
 		bterr("could not create BT socket");
 
 	lsa.l2cap_len = sizeof(lsa);
 	lsa.l2cap_family = AF_BLUETOOTH;
 
-	if (bind(fd, (struct sockaddr *)&lsa, sizeof(lsa)) < 0)
+	if (bind(ctx.fd, (struct sockaddr *)&lsa, sizeof(lsa)) < 0)
 		bterr("could not bind BT socket to local address");
 
 	sa.l2cap_len = sizeof(sa);
@@ -523,20 +578,20 @@ loop(void)
 	sa.l2cap_psm = SDP_UUID_PROTOCOL_AVCTP;
 	bdaddr_copy(&sa.l2cap_bdaddr, &remote);
 
-	if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+	if (connect(ctx.fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
 		bterr("could not connect to AVCTP service");
 
 	if (!dflag && daemon(0, 0) < 0)
 		bterr("could not daemonise");
 
-	query_capabilities(fd);
+	query_capabilities(&ctx);
 
 	/* Poll loop */
 	{
 		for (;;) {
 			int rc;
 			struct pollfd pfd = {
-				.fd = fd,
+				.fd = ctx.fd,
 				.events = POLLIN|POLLHUP,
 				.revents = 0,
 			};
@@ -546,12 +601,13 @@ loop(void)
 				bterr("poll error");
 
 			if (pfd.revents & POLLIN) {
-				handle_event(fd);
+				handle_event(&ctx);
 			}
 		}
 	}
 
-	close(fd);
+	close(ctx.fd);
+	ctx.fd = -1;
 }
 
 int

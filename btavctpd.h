@@ -10,6 +10,7 @@ struct ctx {
 	int fd; /* l2cap socket */
 
 	uint32_t event_mask; /* registered events by the peer */
+	uint8_t status_tid; /* status event transaction id */
 
 	GMainLoop *main_loop;
 	PlayerctlPlayerManager *player_manager;
@@ -121,5 +122,12 @@ event_name(uint8_t const ev)
 
 void btwarnx(char const *const fmt, ...);
 void playerctl_init(struct ctx *ctx);
+void playerctl_play(struct ctx *ctx);
+void playerctl_playpause(struct ctx *ctx);
+void playerctl_next(struct ctx *ctx);
+void playerctl_prev(struct ctx *ctx);
+void playerctl_event_registered(struct ctx *ctx, uint8_t tid, uint8_t event_id);
+void bt_send_avrcp_change_event(struct ctx *ctx, uint8_t tid, uint8_t evt_id, uint8_t status);
+void bt_send_avrcp_interim(struct ctx *ctx, uint8_t tid, uint8_t evt_id, uint8_t status);
 
 #endif /* BTAVCTPD_H */

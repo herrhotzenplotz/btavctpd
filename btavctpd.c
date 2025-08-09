@@ -139,40 +139,40 @@ reply_passthru(struct ctx *ctx, uint8_t const ctype, uint8_t const operation)
 }
 
 static void
-do_play(void)
+do_play(struct ctx *ctx)
 {
 	if (pflag) {
-		system("playerctl play");
+		playerctl_play(ctx);
 	} else {
 		system("xdotool key XF86AudioPlay");
 	}
 }
 
 static void
-do_playpause(void)
+do_playpause(struct ctx *ctx)
 {
 	if (pflag) {
-		system("playerctl play-pause");
+		playerctl_playpause(ctx);
 	} else {
 		system("xdotool key XF86AudioPlay");
 	}
 }
 
 static void
-do_next(void)
+do_next(struct ctx *ctx)
 {
 	if (pflag) {
-		system("playerctl next");
+		playerctl_next(ctx);
 	} else {
 		system("xdotool key XF86AudioNext");
 	}
 }
 
 static void
-do_prev(void)
+do_prev(struct ctx *ctx)
 {
 	if (pflag) {
-		system("playerctl previous");
+		playerctl_prev(ctx);
 	} else {
 		system("xdotool key XF86AudioPrev");
 	}
@@ -193,19 +193,19 @@ handle_passthru(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size
 	switch (avc->operation & 0x7F) {
 	case AVC_PLAY:
 		syslog(LOG_INFO, "Received Play Event");
-		do_play();
+		do_play(ctx);
 		goto ack;
 	case AVC_PAUSE:
 		syslog(LOG_INFO, "Received Pause Event");
-		do_playpause();
+		do_playpause(ctx);
 		goto ack;
 	case AVC_NEXT:
 		syslog(LOG_INFO, "Received Next Event");
-		do_next();
+		do_next(ctx);
 		goto ack;
 	case AVC_PREV:
 		syslog(LOG_INFO, "Received Previous Event");
-		do_prev();
+		do_prev(ctx);
 		goto ack;
 	case AVC_STOP:
 		syslog(LOG_INFO, "Received Stop Event");
@@ -220,6 +220,78 @@ handle_passthru(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size
 		reply_passthru(ctx, AVRCP_CTYPE_REJECTED, avc->operation);
 		break;
 	}
+}
+
+void
+bt_send_avrcp_change_event(struct ctx *ctx, uint8_t tid, uint8_t event_id,
+                           uint8_t status)
+{
+	char buffer[64] = {0};
+	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
+	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
+	struct avrcp_event *evt = (struct avrcp_event *)(rcp_hdr + 1);
+
+	enum { packet_len = sizeof(*ctp_hdr) + sizeof(*rcp_hdr) + sizeof(*evt) };
+	static_assert(packet_len <= sizeof(buffer), "buffer too smol");
+
+	btwarnx("[0x%"PRIx8"]: change for evt 0x%"PRIx8": 0x%"PRIx8"\n",
+	        tid, event_id, status);
+
+	ctp_hdr->id = 0x02 | (tid << 4); /* this is a response, single-frame */
+	ctp_hdr->pid = htobe16(0x110e);
+
+	rcp_hdr->ctype = AVRCP_CTYPE_CHANGED;
+	rcp_hdr->subunit = (0x9 << 3) /* subunit type */ | 0x0 /* subunit id */;
+	rcp_hdr->opcode = AVRCP_OPCODE_VENDOR;
+	rcp_hdr->companyid[0] = 0x00;
+	rcp_hdr->companyid[1] = 0x19;
+	rcp_hdr->companyid[2] = 0x58;
+	rcp_hdr->pdu_id = AVRCP_PDUID_REGISTERNOTIFICATION;
+	rcp_hdr->packet_type = 0; /* single unfragmented */
+	rcp_hdr->param_len = htobe16(sizeof(*evt));
+
+	evt->event_id = event_id;
+	evt->params[0] = status;
+
+	size_t rc = send(ctx->fd, buffer, packet_len, 0);
+	if (rc < 0)
+		bterr("send failed");
+}
+
+void
+bt_send_avrcp_interim(struct ctx *ctx, uint8_t tid, uint8_t event_id,
+                      uint8_t status)
+{
+	char buffer[64] = {0};
+	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
+	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
+	struct avrcp_event *evt = (struct avrcp_event *)(rcp_hdr + 1);
+
+	enum { packet_len = sizeof(*ctp_hdr) + sizeof(*rcp_hdr) + sizeof(*evt) };
+	static_assert(packet_len <= sizeof(buffer), "buffer too smol");
+
+	btwarnx("[0x%"PRIx8"]: interim for evt 0x%"PRIx8": 0x%"PRIx8"\n",
+	        tid, event_id, status);
+
+	ctp_hdr->id = 0x02 | (tid << 4); /* this is a response, single-frame */
+	ctp_hdr->pid = htobe16(0x110e);
+
+	rcp_hdr->ctype = AVRCP_CTYPE_INTERIM;
+	rcp_hdr->subunit = (0x9 << 3) /* subunit type */ | 0x0 /* subunit id */;
+	rcp_hdr->opcode = AVRCP_OPCODE_VENDOR;
+	rcp_hdr->companyid[0] = 0x00;
+	rcp_hdr->companyid[1] = 0x19;
+	rcp_hdr->companyid[2] = 0x58;
+	rcp_hdr->pdu_id = AVRCP_PDUID_REGISTERNOTIFICATION;
+	rcp_hdr->packet_type = 0; /* single unfragmented */
+	rcp_hdr->param_len = htobe16(sizeof(*evt));
+
+	evt->event_id = event_id;
+	evt->params[0] = status;
+
+	size_t rc = send(ctx->fd, buffer, packet_len, 0);
+	if (rc < 0)
+		bterr("send failed");
 }
 
 static void
@@ -240,7 +312,11 @@ handle_event_registration(struct ctx *ctx, uint8_t const *buffer,
 	btwarnx("Peer registed %s event", event_name(evt->evt_id));
 	ctx->event_mask |= (1 << bit_offset);
 
-	/* TODO: send interim response */
+	/* respond with interim if possible and needed */
+	if (pflag) {
+		playerctl_event_registered(
+			ctx, ctp_hdr->id >> 4, evt->evt_id);
+	}
 }
 
 static void
@@ -301,9 +377,9 @@ register_notifications(struct ctx *ctx, uint8_t const evt_id)
 
 	ctp_hdr->pid = htobe16(0x110e);
 
-	rcp_hdr->ctype = AVRCP_CTYPE_NOTIFY;
+	rcp_hdr->ctype = AVRCP_CTYPE_CHANGED;
 	rcp_hdr->subunit = (0x9 << 3) /* subunit type */ | 0x0 /* subunit id */;
-	rcp_hdr->opcode = 0; /* vendor specific */
+	rcp_hdr->opcode = AVRCP_OPCODE_VENDOR; /* vendor specific */
 	rcp_hdr->companyid[0] = 0x00;
 	rcp_hdr->companyid[1] = 0x19;
 	rcp_hdr->companyid[2] = 0x58;
@@ -361,21 +437,16 @@ handle_change_notification(struct ctx *ctx, uint8_t const *buffer, size_t const 
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
 	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
-	struct change_payload {
-		uint8_t evt_id;
-		uint8_t payload[0];
-	} __packed;
+	struct avrcp_event *evt = (struct avrcp_event *)(rcp_hdr + 1);
 
-	struct change_payload *c_payload = (struct change_payload *)(rcp_hdr + 1);
-
-	switch (c_payload->evt_id) {
+	switch (evt->event_id) {
 	case AVRCP_EVENT_VOLUME_CHANGED: {
-		uint8_t vol = c_payload->payload[0] & 0x7F; /* RFA bit masked off */
+		uint8_t vol = evt->params[0] & 0x7F; /* RFA bit masked off */
 		double perc = ((double)(vol) / (double)(0x7F)) * 100.0;
 		syslog(LOG_INFO, "Volume changed to %lf%%", perc);
 
 		/* re-register the event */
-		register_notifications(ctx, c_payload->evt_id);
+		register_notifications(ctx, evt->event_id);
 	} break;
 	default:
 		btwarnx("Unhandled change event");

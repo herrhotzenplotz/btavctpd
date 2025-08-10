@@ -1,7 +1,7 @@
 # A hacky Bluetooth AVRCP Profile daemon for FreeBSD
 
-Currently depends on xdotool to play/pause the playback.
-
+When given `-p` this uses the playerctl library to control media player implementing the mpris interface.
+Otherwise the daemon emits key presses through `xdotool`.
 
 ## Build
 
@@ -10,7 +10,7 @@ Run make, darnit.
 ## Usage
 
 ```console
-$ ./btavctpd [-d] -h <bthostname>
+$ ./btavctpd [-d] [-p] -h <bthostname>
 ```
 
 Also, there's a manual page that you can read:

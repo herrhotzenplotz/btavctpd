@@ -42,7 +42,7 @@ struct avrcp_header {
 
 struct avrcp_event {
 	uint8_t event_id;
-	uint8_t params[0];
+	uint8_t params[1];
 } __packed;
 
 enum {
@@ -96,6 +96,13 @@ enum {
 	AVC_PAUSE = 0x46,
 	AVC_NEXT = 0x4b,
 	AVC_PREV = 0x4c,
+
+	AVC_PLAY_STATUS_STOPPED = 0x00,
+	AVC_PLAY_STATUS_PLAYING,
+	AVC_PLAY_STATUS_PAUSED,
+	AVC_PLAY_STATUS_FWD_SEEK,
+	AVC_PLAY_STATUS_REV_SEEK,
+	AVC_PLAY_STATUS_ERROR = 0xff,
 };
 
 static inline char const *

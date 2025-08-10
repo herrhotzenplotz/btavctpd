@@ -187,7 +187,7 @@ handle_passthru(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size
 	/* Button was released */
 	if (avc->operation & 0x80) {
 		syslog(LOG_INFO, "Button release event");
-		return;
+		goto ack;
 	}
 
 	switch (avc->operation & 0x7F) {
@@ -309,14 +309,15 @@ handle_event_registration(struct ctx *ctx, uint8_t const *buffer,
 		return;
 	}
 
-	btwarnx("Peer registed %s event", event_name(evt->evt_id));
-	ctx->event_mask |= (1 << bit_offset);
-
 	/* respond with interim if possible and needed */
 	if (pflag) {
 		playerctl_event_registered(
 			ctx, ctp_hdr->id >> 4, evt->evt_id);
 	}
+
+	/* now update the event mask */
+	btwarnx("Peer registed %s event", event_name(evt->evt_id));
+	ctx->event_mask |= (1 << bit_offset);
 }
 
 static void
@@ -377,7 +378,7 @@ register_notifications(struct ctx *ctx, uint8_t const evt_id)
 
 	ctp_hdr->pid = htobe16(0x110e);
 
-	rcp_hdr->ctype = AVRCP_CTYPE_CHANGED;
+	rcp_hdr->ctype = AVRCP_CTYPE_NOTIFY;
 	rcp_hdr->subunit = (0x9 << 3) /* subunit type */ | 0x0 /* subunit id */;
 	rcp_hdr->opcode = AVRCP_OPCODE_VENDOR; /* vendor specific */
 	rcp_hdr->companyid[0] = 0x00;

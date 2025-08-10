@@ -23,9 +23,9 @@ static uint8_t
 playerctl_status_to_avc(PlayerctlPlaybackStatus s)
 {
 	static uint8_t mapping[] = {
-		[PLAYERCTL_PLAYBACK_STATUS_PLAYING] = AVC_PLAY,
-		[PLAYERCTL_PLAYBACK_STATUS_PAUSED] = AVC_PAUSE,
-		[PLAYERCTL_PLAYBACK_STATUS_STOPPED] = AVC_STOP,
+		[PLAYERCTL_PLAYBACK_STATUS_PLAYING] = AVC_PLAY_STATUS_PLAYING,
+		[PLAYERCTL_PLAYBACK_STATUS_PAUSED] = AVC_PLAY_STATUS_PAUSED,
+		[PLAYERCTL_PLAYBACK_STATUS_STOPPED] = AVC_PLAY_STATUS_STOPPED,
 	};
 
 	return mapping[s];
@@ -70,7 +70,11 @@ set_current_player(struct ctx *ctx, PlayerctlPlayer *p)
 	g_signal_connect(p, "playback-status",
 	                 G_CALLBACK(on_player_status_changed), ctx);
 
-	/* notify the peer of a player appearing */
+	/* notify the peer of a player appearing, if it actually wants to know */
+	uint32_t msk = 1 << (AVRCP_EVENT_STATUS_CHANGED-1);
+	if ((ctx->event_mask & msk) == 0)
+		return;
+
 	notify_player_status_changed(ctx, player_get_status(p));
 }
 

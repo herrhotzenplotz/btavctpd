@@ -22,6 +22,12 @@ struct avctp_header {
 	uint16_t pid;
 } __packed;
 
+static inline uint8_t
+avctp_tid(struct avctp_header const *hdr)
+{
+	return (hdr->id >> 4) & 0xf;
+}
+
 struct avc_header {
 	uint8_t ctype;
 	uint8_t subunit;

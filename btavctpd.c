@@ -115,7 +115,8 @@ parseflags(int *argc, char ***argv)
 }
 
 static void
-reply_passthru(struct ctx *ctx, uint8_t const ctype, uint8_t const operation)
+reply_passthru(struct ctx *ctx, uint8_t const tid,
+               uint8_t const ctype, uint8_t const operation)
 {
 	uint8_t buffer[8] = {0};
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
@@ -124,7 +125,7 @@ reply_passthru(struct ctx *ctx, uint8_t const ctype, uint8_t const operation)
 
 	static_assert(pkt_len <= sizeof(buffer), "Buffer too smol");
 
-	ctp_hdr->id = 0x02;
+	ctp_hdr->id = 0x02 | (tid << 4);
 	ctp_hdr->pid = htobe16(0x110e);
 
 	avc->ctype = ctype;
@@ -212,12 +213,15 @@ handle_passthru(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size
 		puts("Stopping");
 		/* FALLTHRU */
 	ack:
-		reply_passthru(ctx, AVRCP_CTYPE_ACCEPTED, avc->operation);
+		reply_passthru(ctx, avctp_tid(ctp_hdr), AVRCP_CTYPE_ACCEPTED,
+		               avc->operation);
 		break;
 	default:
 		btwarnx("rejecting unknown operation: 0x%"PRIx8,
 		        avc->operation & 0x7F);
-		reply_passthru(ctx, AVRCP_CTYPE_REJECTED, avc->operation);
+
+		reply_passthru(ctx, avctp_tid(ctp_hdr), AVRCP_CTYPE_REJECTED,
+		               avc->operation);
 		break;
 	}
 }
@@ -312,7 +316,8 @@ handle_event_registration(struct ctx *ctx, uint8_t const *buffer,
 	/* respond with interim if possible and needed */
 	if (pflag) {
 		playerctl_event_registered(
-			ctx, ctp_hdr->id >> 4, evt->evt_id);
+			ctx, avctp_tid(ctp_hdr),
+			evt->evt_id);
 	}
 
 	/* now update the event mask */

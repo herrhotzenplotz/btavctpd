@@ -568,9 +568,6 @@ loop(struct ctx *ctx)
 	if (connect(ctx->fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
 		bterr("could not connect to AVCTP service");
 
-	if (!dflag && daemon(0, 0) < 0)
-		bterr("could not daemonise");
-
 	setup_glib_loop(ctx);
 
 	query_capabilities(ctx);
@@ -588,6 +585,9 @@ main(int argc, char *argv[])
 	openlog(getprogname(), LOG_PID|LOG_PERROR, LOG_DAEMON);
 	syslog(LOG_INFO, "Connecting to BT Address: %s\n",
 	       bt_ntoa(&remote, namebuf));
+
+	if (!dflag && daemon(0, 0) < 0)
+		bterr("could not daemonise");
 
 	playerctl_init(&ctx);
 	loop(&ctx);

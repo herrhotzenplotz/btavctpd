@@ -2,7 +2,11 @@
 .depend.btavctpd
 .depend.btavctpd.btavctpd.o
 .depend.btavctpd.o
+.depend.playerctl.o
 btavctpd
 btavctpd.debug
 btavctpd.full
 btavctpd.o
+playerctl.o
+tags
+btavctpd.8.gz

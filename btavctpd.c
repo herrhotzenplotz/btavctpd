@@ -17,24 +17,6 @@
 #include <bluetooth.h>
 #include <sdp.h>
 
-static inline int
-avctp_is_response(struct avctp_header const *hdr)
-{
-	return !!(hdr->id & 0x2);
-}
-
-static inline int
-avctp_is_command(struct avctp_header const *hdr)
-{
-	return (hdr->id & 0x2) == 0;
-}
-
-static inline int
-avctp_is_singleframe(struct avctp_header const *hdr)
-{
-	return (hdr->id & 0xC) == 0;
-}
-
 static bdaddr_t remote = {0};    /* Address of the remote side */
 static int dflag = 0;            /* -d was specified (no daemon) */
 static int pflag = 0;            /* -p was specfied (use playerctl) */

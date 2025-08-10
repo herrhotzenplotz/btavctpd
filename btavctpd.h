@@ -28,6 +28,24 @@ avctp_tid(struct avctp_header const *hdr)
 	return (hdr->id >> 4) & 0xf;
 }
 
+static inline int
+avctp_is_response(struct avctp_header const *hdr)
+{
+	return !!(hdr->id & 0x2);
+}
+
+static inline int
+avctp_is_command(struct avctp_header const *hdr)
+{
+	return (hdr->id & 0x2) == 0;
+}
+
+static inline int
+avctp_is_singleframe(struct avctp_header const *hdr)
+{
+	return (hdr->id & 0xC) == 0;
+}
+
 struct avc_header {
 	uint8_t ctype;
 	uint8_t subunit;

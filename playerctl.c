@@ -122,6 +122,8 @@ playerctl_init(struct ctx *ctx)
 {
 	GError *error = NULL;
 	GList *players = NULL;
+	PlayerctlPlayer *p = NULL;
+	PlayerctlPlayerName *pn = NULL;
 
 	ctx->player_manager = playerctl_player_manager_new(&error);
 	if (error != NULL) {
@@ -131,6 +133,23 @@ playerctl_init(struct ctx *ctx)
 		exit(EXIT_FAILURE);
 	}
 
+	/* Query available players */
+	players = playerctl_list_players(&error);
+	if (error != NULL) {
+		btwarnx("failed to list players: %s\n", error->message);
+		g_error_free(error);
+		return;
+	}
+
+	if (players != NULL) {
+		/* choose the first player as the default player */
+		pn = (PlayerctlPlayerName *)players->data;
+		on_player_appeared(ctx->player_manager, pn, ctx);
+
+		g_list_free(players);
+	}
+
+	/* now connect the signals */
 	g_signal_connect(ctx->player_manager, "name-appeared",
 	                 G_CALLBACK(on_player_appeared),
 	                 ctx);

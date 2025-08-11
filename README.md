@@ -18,3 +18,5 @@ Also, there's a manual page that you can read:
 ```console
 $ man ./btavctpd.8
 ```
+
+If you use mpv I suggest you install `multimedia/mpv-mpris` which makes mpv remote-controllable through btavctpd.

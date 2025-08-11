@@ -97,6 +97,35 @@ parseflags(int *argc, char ***argv)
 }
 
 static void
+avrcp_reject(struct ctx *ctx, uint8_t const *buffer,
+             size_t const buffer_size, uint8_t code)
+{
+	struct avctp_header *o_ctp = (struct avctp_header *)(buffer);
+	struct avrcp_header *o_rcp = (struct avrcp_header *)(o_ctp + 1);
+
+	uint8_t buf[sizeof(struct avctp_header)+sizeof(struct avrcp_header)+1] = {0};
+	struct avctp_header *ctp = (struct avctp_header *)(buf); 
+	struct avrcp_header *rcp = (struct avrcp_header *)(ctp + 1);
+	uint8_t *parm = (uint8_t *)(rcp + 1);
+
+	ctp->id = 0x02|o_ctp->id;
+	ctp->pid = o_ctp->pid;
+
+	rcp->ctype = AVRCP_CTYPE_REJECTED;
+	rcp->subunit = o_rcp->subunit;
+	rcp->opcode = o_rcp->opcode;
+	memcpy(rcp->companyid, o_rcp->companyid, sizeof(rcp->companyid));
+	rcp->pdu_id = o_rcp->pdu_id;
+	rcp->packet_type = 0;
+	rcp->param_len = 1;
+	*parm = code;
+
+	size_t rc = send(ctx->fd, buffer, sizeof(buf), 0);
+	if (rc < 0)
+		bterr("send failed");
+}
+
+static void
 reply_passthru(struct ctx *ctx, uint8_t const tid,
                uint8_t const ctype, uint8_t const operation)
 {
@@ -292,6 +321,7 @@ handle_event_registration(struct ctx *ctx, uint8_t const *buffer,
 	bit_offset = evt->evt_id - 1;
 	if (bit_offset >= 0xd) {
 		btwarnx("bad event id from peer");
+		avrcp_reject(ctx, buffer, buffer_size, AVRCP_REJECT_BADPARAM);
 		return;
 	}
 
@@ -324,6 +354,13 @@ handle_notify_command(struct ctx *ctx, uint8_t const *buffer, size_t const buffe
 }
 
 static void
+handle_status_command(struct ctx *ctx, uint8_t const *buffer,
+                      size_t const buffer_size)
+{
+	btwarnx("status command received! (unhandled)\n");
+}
+
+static void
 handle_command(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
 {
 	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
@@ -342,13 +379,29 @@ handle_command(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
 		    rcp_hdr->companyid[1] != 0x19 ||
 		    rcp_hdr->companyid[2] != 0x58) {
 			btwarnx("bad notify command received from peer");
+			avrcp_reject(ctx, buffer, buffer_size, AVRCP_REJECT_BADPARAM);
 			return;
 		}
 
 		handle_notify_command(ctx, buffer, buffer_size);
+	} else if (rcp_hdr->ctype == AVRCP_CTYPE_STATUS) {
+		if (rcp_hdr->subunit != (0x09 << 3) ||
+		    rcp_hdr->opcode != 0 ||
+		    rcp_hdr->companyid[0] != 0 ||
+		    rcp_hdr->companyid[1] != 0x19 ||
+		    rcp_hdr->companyid[2] != 0x58) {
+			btwarnx("bad status command received from peer");
+			avrcp_reject(ctx, buffer, buffer_size, AVRCP_REJECT_BADPARAM);
+			return;
+		}
+
+		handle_status_command(ctx, buffer, buffer_size);
 	} else {
 		btwarnx("Unhandled command with ctype 0x%"PRIx8,
 		        rcp_hdr->ctype);
+
+		avrcp_reject(ctx, buffer, buffer_size,
+		             AVRCP_REJECT_INTERNAL_ERROR);
 	}
 }
 
@@ -387,6 +440,7 @@ handle_supported_event(struct ctx *ctx, uint8_t evt)
 {
 	syslog(LOG_INFO, "Register notifications for event %s",
 	       event_name(evt));
+
 	register_notifications(ctx, evt);
 }
 

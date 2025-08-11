@@ -64,6 +64,14 @@ struct avrcp_header {
 	uint16_t param_len;
 } __packed;
 
+enum {
+	AVRCP_REJECT_BADPDU = 0x0,
+	AVRCP_REJECT_BADPARAM = 0x1,
+	AVRCP_REJECT_PARAMCONT = 0x2,
+	AVRCP_REJECT_INTERNAL_ERROR = 0x3,
+	AVRCP_REJECT_NOPLAYERS = 0x15,
+};
+
 struct avrcp_event {
 	uint8_t event_id;
 	uint8_t params[1];

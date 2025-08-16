@@ -479,6 +479,8 @@ handle_stable_response(struct ctx *ctx, uint8_t const *buffer, size_t const buff
 			for (uint8_t i = 0; i < evt_list->n_evts; ++i) {
 				handle_supported_event(ctx, evt_list->evts[i]);
 			}
+		} else {
+			btwarnx("unknown getcapabilites");
 		}
 	} break;
 	case AVRCP_PDUID_REGISTERNOTIFICATION: {
@@ -504,9 +506,19 @@ handle_change_notification(struct ctx *ctx, uint8_t const *buffer, size_t const 
 		register_notifications(ctx, evt->event_id);
 	} break;
 	default:
-		btwarnx("Unhandled change event");
+		btwarnx("Unhandled change event\n");
 		break;
 	}
+}
+
+static void
+handle_interim_notification(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size)
+{
+	struct avctp_header *ctp_hdr = (struct avctp_header *)(buffer);
+	struct avrcp_header *rcp_hdr = (struct avrcp_header *)(ctp_hdr + 1);
+	struct avrcp_event *evt = (struct avrcp_event *)(rcp_hdr + 1);
+
+	btwarnx("interim notification for evt %s\n", event_name(evt->event_id));
 }
 
 static void
@@ -521,6 +533,10 @@ handle_response(struct ctx *ctx, uint8_t const *buffer, size_t const buffer_size
 		btwarnx("NOTIFY response unhandled");
 	else if (rcp_hdr->ctype == AVRCP_CTYPE_CHANGED)
 		handle_change_notification(ctx, buffer, buffer_size);
+	else if (rcp_hdr->ctype == AVRCP_CTYPE_INTERIM)
+		handle_interim_notification(ctx, buffer, buffer_size);
+	else
+		btwarnx("unhandled response to ctype 0x%"PRIx8"\n", rcp_hdr->ctype);
 }
 
 static gboolean

@@ -1,7 +1,8 @@
-PROG=	btavctpd
-SRCS=	btavctpd.c
-LDADD=	-lbluetooth -lsdp
-MAN=	btavctpd.8
+PROG=		btavctpd
+SRCS=		btavctpd.c
+LDADD=		-lbluetooth -lsdp
+MAN=		btavctpd.8
+VERSION=	1.0.0
 
 CFLAGS_PLAYERCTL != pkg-config --cflags playerctl
 LIBS_PLAYERCTL != pkg-config --libs playerctl
@@ -9,6 +10,9 @@ LIBS_PLAYERCTL != pkg-config --libs playerctl
 CFLAGS += $(CFLAGS_PLAYERCTL) -DHAVE_LIBPLAYERCTL=1
 LDADD += $(LIBS_PLAYERCTL)
 SRCS += playerctl.c
+
+CPPFLAGS+=	-DPACKAGE_VERSION=\"$(VERSION)\"
+CFLAGS+=	$(CPPFLAGS)
 
 DESTDIR?=	/
 PREFIX?=	/usr/local

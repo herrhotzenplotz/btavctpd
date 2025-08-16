@@ -21,11 +21,19 @@ static bdaddr_t remote = {0};    /* Address of the remote side */
 static int dflag = 0;            /* -d was specified (no daemon) */
 static int pflag = 0;            /* -p was specfied (use playerctl) */
 
+static void
+version(void)
+{
+	fprintf(stderr, "btavctpd %s\n", PACKAGE_VERSION);
+	fprintf(stderr, "Copyright Nico Sonack <nsonack@herrhotzenplotz.de> and contributors\n");
+}
+
 /* print a usage message */
 static void
 usage(void)
 {
 	fprintf(stderr, "usage: %s [-d] [-p] -h address\n", getprogname());
+	version();
 }
 
 static void
@@ -61,10 +69,11 @@ parseflags(int *argc, char ***argv)
 	struct option options[] = {
 		{ "host", required_argument, NULL, 'h' },
 		{ "no-daemon", no_argument, NULL, 'd' },
+		{ "version", no_argument, NULL, 'v' },
 		{0},
 	};
 
-	while ((ch = getopt_long(*argc, *argv, "+dph:", options, NULL)) != -1) {
+	while ((ch = getopt_long(*argc, *argv, "+dph:v", options, NULL)) != -1) {
 		switch (ch) {
 		case 'h': {
 			/* try as raw address first */
@@ -84,6 +93,10 @@ parseflags(int *argc, char ***argv)
 		} break;
 		case 'p': {
 			pflag = 1;
+		} break;
+		case 'v': {
+			version();
+			exit(0);
 		} break;
 		default: {
 			usage();

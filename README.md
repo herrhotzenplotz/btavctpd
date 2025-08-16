@@ -1,5 +1,7 @@
 # A hacky Bluetooth AVRCP Profile daemon for FreeBSD
 
+This thing allows you to remote control media players on your workstation through Bluetooth.
+
 When given `-p` this uses the playerctl library to control media player implementing the mpris interface.
 Otherwise the daemon emits key presses through `xdotool`.
 

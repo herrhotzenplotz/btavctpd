@@ -630,7 +630,9 @@ main(int argc, char *argv[])
 	if (!dflag && daemon(0, 0) < 0)
 		bterr("could not daemonise");
 
-	playerctl_init(&ctx);
+	if (pflag)
+		playerctl_init(&ctx);
+
 	loop(&ctx);
 
 	return 0;

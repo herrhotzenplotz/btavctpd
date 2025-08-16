@@ -16,11 +16,9 @@ daemon can be used to allow local media players to be controlled
 via the control buttons found on Bluetooth devices such as headsets
 and speakers.
 .Pp
-Currently it requires
-.Xr xdotool 1
-or
-.Xr playerctl 1
-to be installed.
+It can control players either via libplayerctl (available in
+.Em multimedia/playerctl )
+or otherwise using xdotool.
 If using
 .Xr xdotool 1 ,
 .Nm
@@ -36,9 +34,7 @@ In the latter case the daemon must be launched from within an X11 session.
 .It Fl d , -no-daemon
 Do not daemonise and don't detach from the controlling terminal.
 .It Fl p
-Use
-.Xr playerctl 1
-to control the local media player.
+Use libplayerctl to control the local media player.
 .It Fl h , -hostname Ar bthostname
 Connect to the given Bluetooth address or hostname.
 .El
@@ -51,14 +47,17 @@ List of Bluetooth hostnames and their addresses
 Run in the background and connect to a device called
 .Dq headphones
 listed in
-.Pa /etc/bluetooth/hosts :
+.Pa /etc/bluetooth/hosts
+using playerctl to control the media players:
 .Bd -literal -width indent
-$ btavctpd -h headphones
+$ btavctpd -p -h headphones
 .Ed
 .Sh DIAGNOSTICS
 Errors are logged to syslogd and unless the
 .Fl d
 flag is set also to stderr.
+Syslog output should end up in
+.Pa /var/log/daemon.log .
 .Sh SEE ALSO
 .Xr hccontrol 8 ,
 .Xr hcsecd 8 ,
@@ -68,6 +67,20 @@ flag is set also to stderr.
 .Sh AUTHORS
 .An Nico Sonack aka. herrhotzenplotz Aq Mt nsonack@herrhotzenplotz.de
 .Sh BUGS
-Ideally this daemon should use the DBus to report events and provide
-status info to connected devices. However the DBus API sucks and the
-author didn't want to deal with its bloat so you get what you get.
+The AVCTP protocol implementation is likely buggy and not strictly
+compliant to the Bluetooth SIG spec. In case you hit any weirdnesses
+or detect protocol errors please report them either via E-Mail to me or on
+.Lk https://github.com/herrhotzenplotz/btavctpd "Microsoft© GitHub™" .
+.Pp
+You can use
+.Xr hcidump 1
+from the ports tree to record the transactions with the HCI and
+analyse the traffic in Wireshark:
+.Bd -literal -width indent
+# rm -f bork.pcap
+# hcidump -i ubt0hci -w bork.pcap
+# chown user:user bork.pcap
+$ wireshark bork.pcap
+.Ed
+.Pp
+This is how I dissected the traffic for debugging purposes.

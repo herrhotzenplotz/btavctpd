@@ -117,7 +117,7 @@ avrcp_reject(struct ctx *ctx, uint8_t const *buffer,
 	memcpy(rcp->companyid, o_rcp->companyid, sizeof(rcp->companyid));
 	rcp->pdu_id = o_rcp->pdu_id;
 	rcp->packet_type = 0;
-	rcp->param_len = 1;
+	rcp->param_len = htobe16(1);
 	*parm = code;
 
 	size_t rc = send(ctx->fd, buffer, sizeof(buf), 0);
